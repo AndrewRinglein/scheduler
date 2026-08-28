@@ -260,6 +260,13 @@ $('main').addEventListener('click',async e=>{
         ? 'Somebody just took that one — pick another.' : error.message;
       return render();
     }
+    /* Apply locally as well. In the live app loadAll() refetches and the
+       server's answer wins; in the offline demo every write is a no-op by
+       design, and loadAll() re-reads the same objects -- so without this line
+       the demo reported "Done" while the character never changed, which is
+       exactly the bug Angela hit on Abygail's page. */
+    const stp=D.staff.find(x=>x.id===person);
+    if(stp){ stp.pet=pid; stp.pet_kind=kind; }
     await loadAll();
     edits['ui|mpetmsg']=`Done — ${petName(pid)} it is.`;
     return render();
@@ -683,6 +690,19 @@ $('main').addEventListener('click',async e=>{
   }
 
   /* ---- schedule periods ---- */
+  if(e.target.id==='pstartgo'){
+    const d=$('main').querySelector('#pstart')?.value;
+    if(!d) return flash('Pick a day first.');
+    /* Say something NOW. The RPC creates 14 days of sessions and can take a
+       few seconds; a silent button reads as a broken one. */
+    flash('Creating the fortnight…', 10000);
+    const { data, error }=await startPeriodOn(d);
+    if(error||!data?.ok) return flash(error?.message||data?.error||'Could not create it.', 6000);
+    periodId=data.id;
+    await loadPeriods_(); await loadAll();
+    flash(`Fortnight ready — ${data.sessions} sessions, ${data.starts_on} to ${data.ends_on}.`, 6000);
+    return render();
+  }
   if(e.target.id==='pnew'){ 
     const { error }=await ensurePeriod(null);
     if(error) return flash(error.message);

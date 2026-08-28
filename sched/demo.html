@@ -529,35 +529,78 @@
   };
   const rows = t => T[t] || [];
 
-  function builder(table, kind, one) {
-    const settle = () => Promise.resolve(
-      kind === 'select'
-        ? { data: one ? (rows(table)[0] ?? null) : rows(table), error: null, count: rows(table).length }
-        : { data: null, error: null });
+  /* Writes to two tables APPLY to the snapshot: assignments (so building a
+     schedule in the demo actually sticks -- picks hold, the shift counts
+     climb, Clear empties) and staff (the character picker). Everything else
+     still reports success and changes nothing. All of it lives in memory;
+     refresh restores the shipped snapshot. */
+  let demoRowSeq = 0;
+  function applyWrite(table, op, payload, eqs){
+    if (table === 'sched_assignments'){
+      const list = rows(table);
+      if (op === 'delete'){
+        for (let i = list.length - 1; i >= 0; i--){
+          const r = list[i];
+          if (Object.entries(eqs).every(([k, v]) => String(r[k]) === String(v)))
+            list.splice(i, 1);
+        }
+        return;
+      }
+      if (payload){
+        const rowsIn = Array.isArray(payload) ? payload : [payload];
+        for (const q of rowsIn){
+          const hit = list.find(r => r.session_id === q.session_id
+            && r.role_id === q.role_id && r.slot_index === +q.slot_index);
+          const st = SNAP.staff.find(x => x.id === q.staff_id);
+          const ses = SNAP.sessions.find(x => x.id === q.session_id);
+          const full = { id: 'demo-a-' + (++demoRowSeq), early_start: false,
+            is_training: false, scheduled_start: null, scheduled_end: null,
+            ...hit, ...q,
+            sched_staff: { name: st ? st.name : '' },
+            sched_sessions: { hall_id: ses ? ses.hall_id : 'sc' } };
+          if (hit) Object.assign(hit, full); else list.push(full);
+        }
+      }
+      return;
+    }
+    if (table === 'sched_staff' && op === 'update' && payload && eqs.id){
+      const st = SNAP.staff.find(x => x.id === eqs.id);
+      if (st) Object.assign(st, payload);
+    }
+  }
+
+  function builder(table, kind, one, payload, eqs) {
+    eqs = eqs || {};
+    const settle = () => {
+      if (kind === 'select')
+        return Promise.resolve({ data: one ? (rows(table)[0] ?? null) : rows(table),
+          error: null, count: rows(table).length });
+      applyWrite(table, kind, payload, eqs);
+      return Promise.resolve({ data: null, error: null });
+    };
     const api = {
-      select: () => builder(table, 'select', one),
-      insert: () => builder(table, 'write', one),
-      update: () => builder(table, 'write', one),
-      upsert: () => builder(table, 'write', one),
-      delete: () => builder(table, 'write', one),
-      single: () => builder(table, kind, true),
-      maybeSingle: () => builder(table, kind, true),
+      select: () => builder(table, kind === 'select' ? 'select' : kind, one, payload, eqs),
+      insert: (p) => builder(table, 'insert', one, p, eqs),
+      update: (p) => builder(table, 'update', one, p, eqs),
+      upsert: (p) => builder(table, 'upsert', one, p, eqs),
+      delete: () => builder(table, 'delete', one, payload, eqs),
+      single: () => builder(table, kind, true, payload, eqs),
+      maybeSingle: () => builder(table, kind, true, payload, eqs),
+      eq: (k, v) => builder(table, kind, one, payload, { ...eqs, [k]: v }),
       then: (a, b) => settle().then(a, b),
       catch: f => settle().catch(f),
       finally: f => settle().finally(f),
     };
-    /* Every filter is a no-op that returns the same builder: the snapshot is
-       small enough that the app's own filtering does the work, and a stub that
-       half-implements PostgREST is worse than one that does not pretend to. */
-    for (const m of ['order','eq','neq','in','is','gt','gte','lt','lte','like',
+    /* remaining filters are no-ops: the snapshot is small and the app filters
+       its own reads; only eq matters, because deletes and updates target rows
+       with it */
+    for (const m of ['order','neq','in','is','gt','gte','lt','lte','like',
                      'ilike','not','or','filter','limit','range','contains'])
       api[m] = () => api;
     return api;
   }
 
-  /* The two write RPCs answer as the live ones would, changing nothing --
-     Angela's brief for the demo, verbatim: "It's not going to work yet. Just
-     make it so it looks like it works." The blast count is computed from the
+  /* The blast "sends" nothing, but the count is computed from the
      snapshot the same way the server computes it from the tables, so the
      number on screen is the number the real button would text. */
   const blast = (args) => {
@@ -612,7 +655,59 @@
                category: args.p_category || 'worked' };
     },
     schedule_blast: blast,
-    schedule_periods: () => SNAP.periods,
+    /* Counts are recomputed on every call now that assignments actually
+       mutate -- a pick in the new fortnight should move its "filled" number,
+       not the number the build baked in. */
+    schedule_periods: () => SNAP.periods.map(p => {
+      const inR = d => d >= p.starts_on && d <= p.ends_on;
+      const ses = SNAP.sessions.filter(s => inR(s.session_date));
+      const ids = new Set(ses.map(s => s.id));
+      const mine = SNAP.assigns.filter(a => ids.has(a.session_id));
+      return { ...p, sessions: ses.length,
+               filled: mine.filter(a => a.staff_id).length, slots: mine.length };
+    }),
+    /* The demo version of migration 047: create a fortnight on the exact day
+       asked for, synthesize its empty sessions from the hall-day templates,
+       and refuse an overlap with the same wording the live RPC uses. On
+       stage, Create really creates. */
+    schedule_period_start_on: (args) => {
+      const start = args && args.p_start;
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(start || ''))
+        return { ok: false, error: 'Pick a day first.' };
+      const addD = (iso, n) => { const d = new Date(iso + 'T12:00:00');
+        d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); };
+      const end = addD(start, 13);
+      let per = SNAP.periods.find(p => p.starts_on === start);
+      if (!per) {
+        const clash = SNAP.periods.find(p => start <= p.ends_on && end >= p.starts_on);
+        if (clash) {
+          const d = new Date(clash.starts_on + 'T12:00:00');
+          return { ok: false, error: 'That overlaps the fortnight starting '
+            + d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) + '.' };
+        }
+        per = { id: 'demo-per-' + (++demoRowSeq), starts_on: start, ends_on: end,
+          label: null, status: 'draft', note: null, published_at: null,
+          is_current: false };
+        SNAP.periods.push(per);
+      }
+      /* Empty sessions for every active hall-day in the window, skipping any
+         date+hall+part the snapshot already covers -- same as the live
+         ensure_upcoming_sessions, minus the parts of it that need a clock. */
+      const have = new Set(SNAP.sessions.map(s => s.hall_id + '|' + s.session_date + '|' + s.part));
+      const tpl = (SNAP.days || []).filter(d => d.active);
+      for (let i = 0; i < 14; i++) {
+        const date = addD(start, i);
+        const dow = new Date(date + 'T12:00:00').getDay();
+        for (const t of tpl.filter(x => x.dow === dow)) {
+          if (have.has(t.hall_id + '|' + date + '|' + t.part)) continue;
+          SNAP.sessions.push({ id: 'demo-s-' + (++demoRowSeq), hall_id: t.hall_id,
+            session_date: date, part: t.part, status: 'draft', comm_rate: 0.15,
+            day_type: (dow === 0 || dow === 6) ? 'weekend' : 'weekday' });
+        }
+      }
+      const n = SNAP.sessions.filter(s => s.session_date >= start && s.session_date <= end).length;
+      return { ok: true, id: per.id, starts_on: start, ends_on: end, sessions: n };
+    },
     ensure_upcoming_sessions: () => null,
     schedule_period_ensure: () => null,
     manager_attention: () => ({ items: [] }),
@@ -6114,11 +6209,14 @@ $('main').addEventListener('click',async e=>{
   if(e.target.id==='pstartgo'){
     const d=$('main').querySelector('#pstart')?.value;
     if(!d) return flash('Pick a day first.');
+    /* Say something NOW. The RPC creates 14 days of sessions and can take a
+       few seconds; a silent button reads as a broken one. */
+    flash('Creating the fortnight…', 10000);
     const { data, error }=await startPeriodOn(d);
     if(error||!data?.ok) return flash(error?.message||data?.error||'Could not create it.', 6000);
     periodId=data.id;
     await loadPeriods_(); await loadAll();
-    flash(`Fortnight ready — ${data.sessions} sessions, ${data.starts_on} to ${data.ends_on}.`);
+    flash(`Fortnight ready — ${data.sessions} sessions, ${data.starts_on} to ${data.ends_on}.`, 6000);
     return render();
   }
   if(e.target.id==='pnew'){ 

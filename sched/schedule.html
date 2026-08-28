@@ -1,0 +1,245 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Schedule — Santa Clara</title>
+<style>
+  :root{
+    --ink:#1c2024; --muted:#69727c; --line:#dfe3e8; --bg:#f5f6f8; --panel:#fff;
+    --deployed:#2f7d63; --planned:#3d6f8e; --draft:#8a8f96;
+    --alert:#c0392b; --alert-bg:#fdecea; --warn:#d1892f; --warn-bg:#fff6e6;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
+  header{background:var(--panel);border-bottom:1px solid var(--line);padding:14px 22px}
+  h1{margin:0;font-size:19px}
+  .sub{color:var(--muted);font-size:13px;margin-top:2px}
+  main{padding:18px 22px 70px;max-width:1400px;margin:0 auto}
+  h2{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);
+     margin:22px 0 10px;font-weight:650}
+
+  /* ---- week cards ---- */
+  .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(184px,1fr));gap:10px}
+  .card{background:var(--panel);border:1px solid var(--line);border-left-width:4px;
+        border-radius:8px;padding:11px 13px;cursor:pointer;text-align:left;font:inherit;
+        transition:box-shadow .12s, transform .12s}
+  .card:hover{box-shadow:0 3px 10px rgba(0,0,0,.09);transform:translateY(-1px)}
+  .card.sel{box-shadow:0 0 0 2px var(--ink)}
+  .card.deployed{border-left-color:var(--deployed)}
+  .card.planned {border-left-color:var(--planned)}
+  .card.draft   {border-left-color:var(--draft)}
+  .card .day{font-weight:650}
+  .card .meta{color:var(--muted);font-size:12.5px;margin-top:1px}
+  .chip{display:inline-block;font-size:11px;font-weight:650;letter-spacing:.04em;
+        text-transform:uppercase;padding:1px 7px;border-radius:20px;margin-top:7px;color:#fff}
+  .chip.deployed{background:var(--deployed)} .chip.planned{background:var(--planned)}
+  .chip.draft{background:var(--draft)}
+  .flag{margin-top:7px;font-size:12.5px;font-weight:600;color:var(--alert);
+        background:var(--alert-bg);border-radius:4px;padding:3px 7px;display:block}
+  .flag.ok{color:#5a5f14;background:#f4f6dd}
+
+  /* ---- day detail ---- */
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:8px;
+         padding:16px 18px;margin-top:10px}
+  .rolerow{display:grid;grid-template-columns:172px 1fr;gap:14px;
+           padding:11px 0;border-top:1px solid var(--line)}
+  .rolerow:first-of-type{border-top:none}
+  .rolename{font-weight:650}
+  .rtime{color:var(--muted);font-size:12px;font-weight:400;margin-top:2px}
+  .people{display:flex;flex-wrap:wrap;gap:6px}
+  .p{background:var(--bg);border:1px solid var(--line);border-radius:5px;padding:3px 9px;font-size:14px}
+  .p.early{border-color:var(--warn);background:var(--warn-bg)}
+  .p.training{border-style:dashed;color:var(--muted)}
+  .p.rejected{border-color:var(--alert);background:var(--alert-bg);
+              color:var(--alert);text-decoration:line-through}
+  .p sup{font-size:10px;color:var(--warn);font-weight:700}
+  .count{color:var(--muted);font-size:12px;margin-left:6px;font-weight:400}
+
+  table{border-collapse:collapse;width:100%;font-size:13.5px;margin-top:4px}
+  th,td{text-align:left;padding:5px 9px;border-bottom:1px solid var(--line)}
+  th{color:var(--muted);font-weight:600;font-size:12px}
+  td.calling{font-weight:650;color:#7a3d00;background:#fff8ef}
+  .legend{color:var(--muted);font-size:12.5px;margin-top:14px}
+  .banner{background:var(--warn-bg);border-left:3px solid var(--warn);padding:8px 12px;
+          border-radius:5px;font-size:13px;margin-bottom:14px}
+</style>
+</head>
+<body>
+<div id="login" style="max-width:340px;margin:70px auto;background:#fff;padding:22px;border:1px solid #dfe3e8;border-radius:8px">
+  <h1 style="margin:0 0 4px;font-size:19px">Schedule</h1>
+  <p class="sub" style="margin:0 0 16px">Sign in to view.</p>
+  <input id="email" type="email" value="staff@bingohalls.app" style="width:100%;padding:7px;margin-bottom:9px;border:1px solid #dfe3e8;border-radius:5px">
+  <input id="pw" type="password" placeholder="password" style="width:100%;padding:7px;margin-bottom:11px;border:1px solid #dfe3e8;border-radius:5px">
+  <button id="signin" style="width:100%;padding:8px;background:#2f6f4f;color:#fff;border:none;border-radius:6px;font:inherit;font-weight:600;cursor:pointer">Sign in</button>
+  <div id="loginerr" style="color:#8a1f00;font-size:13px;margin-top:8px"></div>
+</div>
+<div id="shell" hidden>
+<header>
+  <h1>Schedule — Santa Clara</h1>
+  <div class="sub" id="range"></div>
+</header>
+<main>
+  <div class="banner">
+    Live from the database — <span id="cnt">loading…</span>. Statuses are real; the roster is
+    Rachel's imported 7/31–8/10 schedule.
+  </div>
+
+  <h2>Upcoming sessions</h2>
+  <div class="cards" id="cards"></div>
+
+  <h2 id="dayhead">Day</h2>
+  <div class="panel" id="day"></div>
+</main></div>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.47.10"></script>
+
+<script>
+let DATA = { sessions: [], calling: {} };
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+let sel = 0;
+
+const rejectedNames = s => new Set((s.rejections||[]).filter(r=>!r.replaced).map(r=>r.name));
+const headcount = s => s.slots.reduce((n,x)=>n+x.people.length,0);
+
+function callingKey(s){ return s.part ? `${s.date} ${s.part}` : s.date; }
+
+function renderCards(){
+  $('range').textContent =
+    `${DATA.sessions.length} sessions · ${DATA.sessions[0].label} to ${DATA.sessions.at(-1).label}`;
+  $('cards').innerHTML = DATA.sessions.map((s,i)=>{
+    const open = (s.rejections||[]).filter(r=>!r.replaced);
+    const fixed = (s.rejections||[]).filter(r=>r.replaced);
+    let flag = '';
+    if (open.length)  flag = `<span class="flag">${open.length} unfilled — ${esc(open.map(r=>r.name).join(', '))} declined</span>`;
+    else if (fixed.length) flag = `<span class="flag ok">${esc(fixed[0].name)} → ${esc(fixed[0].by)} handoff</span>`;
+    return `<button class="card ${s.status} ${i===sel?'sel':''}" data-i="${i}">
+      <div class="day">${esc(s.label)}</div>
+      <div class="meta">${headcount(s)} on shift</div>
+      <span class="chip ${s.status}">${s.status}</span>
+      ${flag}
+    </button>`;
+  }).join('');
+}
+
+function renderDay(){
+  const s = DATA.sessions[sel];
+  const rej = rejectedNames(s);
+  $('dayhead').textContent = s.label;
+
+  const roles = s.slots.filter(sl=>sl.people.length).map(sl=>{
+    const t = sl.people.find(p=>p.time_note)?.time_note;
+    return `<div class="rolerow">
+      <div><div class="rolename">${esc(sl.role)}<span class="count">${sl.people.length}</span></div>
+      ${t?`<div class="rtime">${esc(t)}</div>`:''}</div>
+      <div class="people">${sl.people.map(p=>{
+        const cls = [p.early?'early':'', p.training?'training':'', rej.has(p.name)?'rejected':''].filter(Boolean).join(' ');
+        return `<span class="p ${cls}">${esc(p.name)}${p.early?'<sup>★</sup>':''}${p.training?' · training':''}${p.new?' · new':''}</span>`;
+      }).join('')}</div>
+    </div>`;
+  }).join('');
+
+  const cal = DATA.calling[callingKey(s)];
+  const calHtml = !cal ? '' : `
+    <h2 style="margin-top:20px">Caller rotation</h2>
+    <table><thead><tr><th>Caller</th><th>First section</th><th>Second section</th><th>Third section</th></tr></thead>
+    <tbody>${cal.map(c=>`<tr><td><strong>${esc(c.name)}</strong></td>${
+      c.sections.map(x=>`<td class="${/^Calling$/i.test(x)?'calling':''}">${esc(x||'—')}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
+
+  $('day').innerHTML = roles + calHtml +
+    `<div class="legend">★ early start for buy-ins · dashed = training · struck through = declined, still unfilled</div>`;
+}
+
+$('cards').addEventListener('click', e => {
+  const b = e.target.closest('.card'); if(!b) return;
+  sel = +b.dataset.i; renderCards(); renderDay();
+});
+
+
+/* ---------- live data ---------- */
+const SUPABASE_URL = 'https://lkcfbgnuodqzvowschjn.supabase.co';
+const SUPABASE_KEY = 'sb_publishable_t3vO3q1Y7PRH3qVp_64dfg_L4Zr1fIT';
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+const DOW = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+
+async function loadLive() {
+  const [{data:sessions, error:e1}, {data:roles, error:e2}, {data:times, error:e4},
+         {data:assigns, error:e3}] = await Promise.all([
+    sb.from('sched_sessions').select('*').order('session_date').order('part'),
+    sb.from('sched_roles').select('*').order('sort'),
+    sb.from('sched_role_times').select('*'),
+    sb.from('sched_assignments')
+      .select('*, sched_staff(name), sched_roles(name,sort), sched_sessions(session_date,part)')
+      .order('slot_index'),
+  ]);
+  const err = e1||e2||e3||e4;
+  if (err) { document.getElementById('cnt').textContent = 'load failed: ' + err.message; return; }
+
+  const timeFor = (roleId, dayType, part) => {
+    const t = times.find(x => x.role_id === roleId && x.day_type === dayType && x.part === part);
+    return t ? t.start_time.slice(0,5) : null;
+  };
+
+  DATA.sessions = sessions.map(s => {
+    const mine = assigns.filter(a => a.session_id === s.id);
+    const d = new Date(s.session_date + 'T12:00:00');
+    const label = `${DOW[d.getDay()]} ${d.getMonth()+1}/${d.getDate()}` + (s.part !== 'single' ? ` ${s.part}` : '');
+    return {
+      label, date: s.session_date, part: s.part === 'single' ? null : s.part,
+      status: s.status,
+      rejections: mine.filter(a => a.response === 'declined').map(a => ({
+        name: a.sched_staff?.name || '—', role: a.sched_roles?.name,
+        replaced: !!a.handed_from, by: null })),
+      slots: roles.map(r => ({
+        role: r.name,
+        people: mine.filter(a => a.role_id === r.id).map(a => ({
+          name: a.sched_staff?.name || '(open)',
+          early: a.early_start, training: a.is_training,
+          new: /new/i.test(a.note || ''), shared: (a.note||'').includes('/'),
+          raw: a.note || a.sched_staff?.name,
+          time_note: timeFor(r.id, s.day_type, s.part),
+        })),
+      })).filter(x => x.people.length),
+    };
+  });
+
+  const { data: cp } = await sb.from('sched_caller_positions')
+    .select('*, sched_staff(name), sched_sessions(session_date,part)');
+  DATA.calling = {};
+  for (const row of cp || []) {
+    const k = row.sched_sessions.part === 'single'
+      ? row.sched_sessions.session_date
+      : `${row.sched_sessions.session_date} ${row.sched_sessions.part}`;
+    DATA.calling[k] = DATA.calling[k] || [];
+    let e = DATA.calling[k].find(x => x.name === row.sched_staff.name);
+    if (!e) { e = { name: row.sched_staff.name, sections: ['','',''] }; DATA.calling[k].push(e); }
+    e.sections[row.section - 1] = row.position;
+  }
+
+  document.getElementById('cnt').textContent =
+    `${DATA.sessions.length} sessions, ${assigns.length} assignments`;
+  sel = 0; renderCards(); renderDay();
+}
+
+async function boot() {
+  const { data:{ session } } = await sb.auth.getSession();
+  if (!session) { document.getElementById('login').hidden = false; document.getElementById('shell').hidden = true; return; }
+  document.getElementById('login').hidden = true; document.getElementById('shell').hidden = false;
+  await loadLive();
+}
+document.getElementById('signin').addEventListener('click', async () => {
+  const { error } = await sb.auth.signInWithPassword({
+    email: document.getElementById('email').value.trim(),
+    password: document.getElementById('pw').value });
+  if (error) { document.getElementById('loginerr').textContent = error.message; return; }
+  boot();
+});
+document.getElementById('pw').addEventListener('keydown', e => {
+  if (e.key === 'Enter') document.getElementById('signin').click(); });
+boot();
+
+</script>
+</body>
+</html>

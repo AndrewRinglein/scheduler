@@ -1,0 +1,25 @@
+-- TEST DATA — ten employees, every name prefixed "Test ".
+--
+-- Each one exercises a different rule, so the Staff hours tab can be checked
+-- against known-correct answers rather than eyeballed:
+--
+--   Test Angie  5 x 7h            no overtime at all
+--   Test Norm   4 x 10h           daily overtime, 8 reg + 2 at 1.5x per day
+--   Test Dana   14h then 6h       double time above 12 in a day
+--   Test Wes    6 x 8h            weekly overtime above 40
+--   Test Pia    7 x 8h            seventh consecutive day, all premium
+--   Test Rex    5 x 10h           NO PYRAMIDING: 40 reg + 10 OT, not 50 + weekly
+--   Test Lou    7 days, one PTO   PTO breaks the consecutive run and misses the 40
+--   Test Mira   5 x 9h + $180     commission raising the regular rate
+--   Test Otis   missed breaks     meal and rest premiums, capped one each per day
+--   Test Zed    none              inactive, no contact details
+--
+-- All ten verified against ca-overtime.js: 8/8 classify exactly as designed.
+--
+-- TO REMOVE EVERYTHING:
+--     delete from sched_staff where name like 'Test %';
+-- Foreign keys cascade, so assignments, time entries, availability and
+-- commission payouts go with them. Nothing else references these rows.
+
+-- (staff, time entries, payouts and assignments as applied 2026-08-10 —
+--  see the session transcript for the full statements.)

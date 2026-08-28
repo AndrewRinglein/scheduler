@@ -1,0 +1,10 @@
+{
+  "name": "employee-management",
+  "version": "0.1.0",
+  "description": "Bingo hall staff scheduler \u2014 Frontier Gaming Systems",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "test": "node --test \"tests/**/*.test.js\""
+  }
+}

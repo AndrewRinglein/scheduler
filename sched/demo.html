@@ -439,6 +439,7 @@
     <div class="top">
       <h1>Scheduler</h1>
       <span class="grow"></span>
+      <span class="chip planned" title="Messages queue but nothing is sent — the SMS and email providers are not connected yet">Text &amp; email disabled</span>
       <span id="who" style="color:#69727c;font-size:13px"></span>
       <button class="btn" id="signout">Sign out</button>
     </div>
@@ -506,7 +507,19 @@
     ];
   })();
   SNAP.time = SNAP.time || [];
+  /* Everybody is fully available -- Angela's choice for the demo. A row per
+     person per operating slot, available:true, because in this schema absence
+     means "never asked" and shows as grey, not green. */
+  SNAP.avail = [];
+  {
+    const slots = [...new Map((SNAP.days || []).filter(d => d.active)
+      .map(d => [d.dow + '|' + d.part, d])).values()];
+    for (const st of SNAP.staff.filter(s => s.active))
+      for (const d of slots)
+        SNAP.avail.push({ staff_id: st.id, dow: d.dow, part: d.part, available: true });
+  }
   const T = {
+    sched_staff_availability: SNAP.avail,
     sched_time_entries: SNAP.time,
     sched_roles: SNAP.roles, sched_hall_days: SNAP.days,
     sched_hall_role_needs: SNAP.needs, sched_hall_role_times: SNAP.times,
@@ -2056,6 +2069,10 @@ async function ensurePeriod(anyDate){
   return sb.rpc('schedule_period_ensure', { p_any_date: anyDate || null });
 }
 async function loadPeriods(){ return sb.rpc('schedule_periods', { p_limit: 24 }); }
+/* Start a fortnight on an exact date -- Angela's day, not a snapped Monday. */
+async function startPeriodOn(date){
+  return sb.rpc('schedule_period_start_on', { p_start: date });
+}
 async function setPeriod(id, patch){
   return sb.rpc('schedule_period_set',
     { p_id:id, p_label:patch.label ?? null, p_note:patch.note ?? null,
@@ -2343,6 +2360,9 @@ function renderPeriodBar(){
       <button class="btn" id="pcopy" title="Same people, same roles, where they still can">Copy last fortnight</button>
       <button class="btn" id="pfill" title="Suggest people who said they can work">Fill from availability</button>
       <button class="btn" id="pclear" title="Empty every slot, keeping the shape">Clear people</button>
+      <span class="rtime" style="margin-left:10px">New fortnight from</span>
+      <input type="date" id="pstart" value="${new Date().toISOString().slice(0,10)}">
+      <button class="btn" id="pstartgo" title="Two weeks, starting the day you pick">Create</button>
       <div style="flex:1"></div>
       <label class="pullbox" title="Skip anyone who has already confirmed every shift">
         <input type="checkbox" id="pblastu" ${edits['ui|blastu']?'checked':''}> only unconfirmed</label>
@@ -2387,7 +2407,27 @@ function blastCount(){
   return n;
 }
 
+/* How many shifts each person already holds in the fortnight on screen --
+   Angela: "The first time I choose Rachel, I just choose Rachel. When I go and
+   choose Rachel from another dropdown on another day, it's going to say
+   Rachel, 1 shift." Assignments save immediately, so D.assigns is current the
+   moment a name is picked. */
+let _shiftCounts = new Map();
+function periodShiftCounts(){
+  const cur = currentPeriod();
+  const m = new Map();
+  if (!cur) return m;
+  const ids = new Set(D.sessions
+    .filter(s => s.session_date >= cur.starts_on && s.session_date <= cur.ends_on)
+    .map(s => s.id));
+  for (const a of D.assigns)
+    if (a.staff_id && ids.has(a.session_id))
+      m.set(a.staff_id, (m.get(a.staff_id) || 0) + 1);
+  return m;
+}
+
 function viewWeek(){
+  _shiftCounts = periodShiftCounts();
   const bar=renderPeriodBar(), cur=currentPeriod();
   if(!cur) return bar;
 
@@ -2482,8 +2522,12 @@ function viewDay(){
         /* Disabled if they hold ANY slot other than this exact one. */
         const elsewhere=busy.has(p.id)&&busy.get(p.id)!==thisSlot;
         const off=!isAvailable(p.id,dw,s.part)&&p.id!==id;
+        /* Their OTHER shifts this fortnight -- the slot being edited does not
+           count itself, so the first pick reads as just the name. */
+        const others=(_shiftCounts.get(p.id)||0)-(p.id===id?1:0);
         return `<option value="${p.id}" ${p.id===id?'selected':''} ${elsewhere||off?'disabled':''}>${
-          esc(p.name)}${elsewhere?' — already on this session':''}${off?" — doesn't work this day":''}${
+          esc(p.name)}${others>0?` · ${others} shift${others===1?'':'s'}`:''}${
+          elsewhere?' — already on this session':''}${off?" — doesn't work this day":''}${
           !okFor(p.id)?' (no longer qualified)':''}</option>`;
       };
       const opts='<option value="">— open —</option>' + pool.map(opt).join('');
@@ -5637,6 +5681,13 @@ $('main').addEventListener('click',async e=>{
         ? 'Somebody just took that one — pick another.' : error.message;
       return render();
     }
+    /* Apply locally as well. In the live app loadAll() refetches and the
+       server's answer wins; in the offline demo every write is a no-op by
+       design, and loadAll() re-reads the same objects -- so without this line
+       the demo reported "Done" while the character never changed, which is
+       exactly the bug Angela hit on Abygail's page. */
+    const stp=D.staff.find(x=>x.id===person);
+    if(stp){ stp.pet=pid; stp.pet_kind=kind; }
     await loadAll();
     edits['ui|mpetmsg']=`Done — ${petName(pid)} it is.`;
     return render();
@@ -6060,6 +6111,16 @@ $('main').addEventListener('click',async e=>{
   }
 
   /* ---- schedule periods ---- */
+  if(e.target.id==='pstartgo'){
+    const d=$('main').querySelector('#pstart')?.value;
+    if(!d) return flash('Pick a day first.');
+    const { data, error }=await startPeriodOn(d);
+    if(error||!data?.ok) return flash(error?.message||data?.error||'Could not create it.', 6000);
+    periodId=data.id;
+    await loadPeriods_(); await loadAll();
+    flash(`Fortnight ready — ${data.sessions} sessions, ${data.starts_on} to ${data.ends_on}.`);
+    return render();
+  }
   if(e.target.id==='pnew'){ 
     const { error }=await ensurePeriod(null);
     if(error) return flash(error.message);
